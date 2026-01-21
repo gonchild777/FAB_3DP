@@ -1,0 +1,1 @@
+if('serviceWorker' in navigator) {window.addEventListener('load', () => {navigator.serviceWorker.register('/FAB_3DP/sw.js', { scope: '/FAB_3DP/' })})}
