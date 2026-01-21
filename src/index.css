@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===== 全域設定 ===== */
+:root {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* 設計系統顏色 */
+  --color-bg-primary: #0a0a0f;
+  --color-bg-secondary: rgba(15, 15, 22, 0.98);
+  --color-bg-tertiary: rgba(25, 25, 35, 0.95);
+  --color-accent: #6366f1;
+  --color-accent-light: #818cf8;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-text-primary: #ffffff;
+  --color-text-secondary: rgba(255, 255, 255, 0.7);
+  --color-text-muted: rgba(255, 255, 255, 0.5);
+  --color-border: rgba(255, 255, 255, 0.06);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+}
+
+/* ===== Leva 下拉選單修復 ===== */
+/* 確保 select 下拉選單文字可見 */
+[data-leva-portal] select,
+.leva-c-bFmOrd select,
+div[class*="leva"] select {
+  color: #ffffff !important;
+  background-color: rgba(35, 35, 50, 0.98) !important;
+}
+
+[data-leva-portal] select option,
+div[class*="leva"] select option {
+  color: #ffffff !important;
+  background-color: #1e1e2e !important;
+  padding: 8px 12px;
+}
+
+/* Leva 整體樣式強化 */
+[data-leva-portal] {
+  --leva-colors-elevation1: rgba(15, 15, 22, 0.98) !important;
+  --leva-colors-elevation2: rgba(25, 25, 35, 0.98) !important;
+  --leva-colors-highlight1: #ffffff !important;
+  --leva-colors-highlight2: rgba(255, 255, 255, 0.85) !important;
+}
+
+/* ===== 滾動條美化 ===== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* ===== 按鈕基礎樣式 ===== */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ===== 選取效果 ===== */
+::selection {
+  background-color: var(--color-accent);
+  color: white;
+}
+
+/* ===== 輸入框聚焦效果 ===== */
+input:focus,
+select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
