@@ -1,13 +1,44 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useMemo } from 'react'
 import useStore from '../../stores/useStore'
+import {
+    calculateTotalPoints,
+    calculateVisibleProgress,
+    calculateSegmentCounts,
+} from '../../utils/animationProgress'
 
 export default function AnimationPlayer() {
     const pathData = useStore((state) => state.pathData)
+    const startLayer = useStore((state) => state.startLayer)
+    const endLayer = useStore((state) => state.endLayer)
     const animation = useStore((state) => state.animation)
     const setAnimationPlaying = useStore((state) => state.setAnimationPlaying)
     const setAnimationProgress = useStore((state) => state.setAnimationProgress)
     const setAnimationSpeed = useStore((state) => state.setAnimationSpeed)
     const resetAnimation = useStore((state) => state.resetAnimation)
+
+    // 計算當前 layer / segment 進度
+    const progressInfo = useMemo(() => {
+        if (!pathData?.layers) return null
+        const visibleLayers = pathData.layers.filter(
+            (l) => l.layer_index >= startLayer && l.layer_index <= endLayer
+        )
+        if (visibleLayers.length === 0) return null
+
+        const totalPoints = calculateTotalPoints(visibleLayers)
+        const vp = animation.progress >= 1
+            ? { layerIndex: visibleLayers.length - 1, segmentIndex: visibleLayers[visibleLayers.length - 1].segments.length - 1, pointIndex: -1 }
+            : calculateVisibleProgress(visibleLayers, animation.progress, totalPoints)
+
+        const segCount = calculateSegmentCounts(visibleLayers, vp)
+        const currentLayerNum = visibleLayers[Math.min(vp.layerIndex, visibleLayers.length - 1)]?.layer_index ?? 0
+
+        return {
+            currentLayer: currentLayerNum + 1,
+            totalLayers: visibleLayers.length,
+            currentSegment: segCount.currentSegment,
+            totalSegments: segCount.totalSegments,
+        }
+    }, [pathData, startLayer, endLayer, animation.progress])
 
     const animationRef = useRef(null)
     const lastTimeRef = useRef(0)
@@ -213,8 +244,44 @@ export default function AnimationPlayer() {
                     <option value={1}>1×</option>
                     <option value={2}>2×</option>
                     <option value={4}>4×</option>
+                    <option value={10}>10×</option>
+                    <option value={50}>50×</option>
                 </select>
             </div>
+
+            {/* Layer / Segment 進度標籤 */}
+            {progressInfo && (
+                <div style={{
+                    paddingLeft: '12px',
+                    borderLeft: '1px solid rgba(255,255,255,0.1)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px',
+                    fontFamily: "'JetBrains Mono', monospace",
+                }}>
+                    <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Layer
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'white', fontWeight: '600' }}>
+                        {progressInfo.currentLayer} / {progressInfo.totalLayers}
+                    </div>
+                </div>
+            )}
+            {progressInfo && (
+                <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px',
+                    fontFamily: "'JetBrains Mono', monospace",
+                }}>
+                    <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Segment
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.8)', fontWeight: '500' }}>
+                        {progressInfo.currentSegment} / {progressInfo.totalSegments}
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

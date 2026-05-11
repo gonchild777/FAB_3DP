@@ -365,6 +365,42 @@
 - Phase 5: 多設備指令集、自定義編輯器
 - 額外: PWA 支援、GitHub Pages 部署
 
+## 🎉 Phase 8 完成！
+
+**Phase 8: 動畫模擬增強** 已全部完成！
+
+### 已實現功能
+
+1. **動畫進度工具** (`src/utils/animationProgress.js`)
+   - `calculateTotalPoints(layers)`、`calculateVisibleProgress(layers, progress, total)`
+   - `getNozzlePosition(layers, vp)` — 含 travel/print 標記
+   - `calculateSegmentCounts(layers, vp)` — 跨層累計段落索引
+   - 從 PathRenderer 抽出，供 AnimationPlayer 共用
+
+2. **噴頭游標**（`PathRenderer` 新增 `NozzleCursor`）
+   - 內球：橘色實心（列印中）/ 灰藍（空移中），含 emissive 自發光
+   - 外球：半透明光暈（2.5× 半徑）
+   - 僅在 `0 < progress < 1` 時顯示
+   - 自動依當前段落型態切換顏色（橘 = 列印、灰 = 空移）
+
+3. **未來路徑虛影**（`PathRenderer` 新增 `FutureSegmentsOverlay`）
+   - 尚未列印的段落以暗灰色（#4a5568）半透明（opacity 0.35）顯示
+   - 含「當前段落內未完成的部分」邏輯：從 `pointIndex` 之後切片
+   - 僅在動畫播放中啟用，靜止時恢復單一渲染模式
+
+4. **AnimationPlayer 強化**
+   - 新增 10× / 50× 速度選項（快速預覽用）
+   - 新增 Layer x/y、Segment a/b 即時進度標籤
+   - 利用 useMemo 避免每幀重算
+
+### 驗證結果
+- ✅ progress=0.5 在 sample-print 對應到 Layer 1 第 2 段第 0 點，座標 (0,0,8)，標記為 travel
+- ✅ Layer 與 Segment 索引隨進度連續遞增（1→12）
+- ✅ npm run build 通過
+- ✅ Travel/print 顏色自動切換正常
+
+---
+
 ## 🎉 Phase 7 完成！
 
 **Phase 7: 進階路徑優化演算法** 已全部完成！

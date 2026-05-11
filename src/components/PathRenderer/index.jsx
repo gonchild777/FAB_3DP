@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import * as THREE from 'three'
 import useStore from '../../stores/useStore'
 import { analyzeOverhang, getOverhangColor } from '../../core/analyzer'
+import { calculateTotalPoints, calculateVisibleProgress, getNozzlePosition } from '../../utils/animationProgress'
 
 // 單個圓柱段
 function CylinderSegment({ start, end, radius, color }) {
@@ -96,38 +97,72 @@ function LinePathSegment({ points, color, opacity = 1, endIndex = -1 }) {
     )
 }
 
-// 計算總點數
-function calculateTotalPoints(layers) {
-    let total = 0
-    for (const layer of layers) {
-        for (const segment of layer.segments) {
-            total += segment.points.length
-        }
-    }
-    return total
+// 噴頭游標：橘色雙球體，沿路徑移動
+function NozzleCursor({ position, radius, isTravel }) {
+    if (!position) return null
+    const innerColor = isTravel ? '#94a3b8' : '#fb923c'
+    const outerColor = isTravel ? '#cbd5e1' : '#fed7aa'
+
+    return (
+        <group position={[position.x, position.z, position.y]}>
+            {/* 外層光暈 */}
+            <mesh>
+                <sphereGeometry args={[radius * 2.5, 16, 12]} />
+                <meshBasicMaterial color={outerColor} transparent opacity={0.25} />
+            </mesh>
+            {/* 內層實心 */}
+            <mesh>
+                <sphereGeometry args={[radius * 1.3, 24, 16]} />
+                <meshStandardMaterial color={innerColor} emissive={innerColor} emissiveIntensity={0.4} roughness={0.3} metalness={0.2} />
+            </mesh>
+        </group>
+    )
 }
 
-// 計算可見進度
-function calculateVisibleProgress(layers, progress, totalPoints) {
-    const targetPointIndex = Math.floor(progress * totalPoints)
-    let currentPointIndex = 0
+// 未來路徑虛影：尚未列印的段落以暗灰色顯示
+function FutureSegmentsOverlay({ layers, visibleProgress, showTravelMoves }) {
+    return (
+        <group>
+            {layers.map((layer, li) => {
+                if (li < visibleProgress.layerIndex) return null
+                const isCurrent = li === visibleProgress.layerIndex
 
-    for (let li = 0; li < layers.length; li++) {
-        const layer = layers[li]
-        for (let si = 0; si < layer.segments.length; si++) {
-            const segment = layer.segments[si]
-            if (currentPointIndex + segment.points.length > targetPointIndex) {
-                return {
-                    layerIndex: li,
-                    segmentIndex: si,
-                    pointIndex: targetPointIndex - currentPointIndex,
-                }
-            }
-            currentPointIndex += segment.points.length
-        }
-    }
+                return (
+                    <group key={`fut-${layer.layer_index}`}>
+                        {layer.segments.map((seg, si) => {
+                            if (isCurrent && si < visibleProgress.segmentIndex) return null
+                            if (seg.type === 'travel' && !showTravelMoves) return null
 
-    return { layerIndex: layers.length - 1, segmentIndex: -1, pointIndex: -1 }
+                            // 當前 segment：從 pointIndex 之後渲染
+                            if (isCurrent && si === visibleProgress.segmentIndex) {
+                                const startIdx = Math.max(0, visibleProgress.pointIndex)
+                                const remaining = seg.points.slice(startIdx)
+                                if (remaining.length < 2) return null
+                                return (
+                                    <LinePathSegment
+                                        key={`fut-${li}-${si}`}
+                                        points={remaining}
+                                        color="#4a5568"
+                                        opacity={0.35}
+                                    />
+                                )
+                            }
+
+                            // 完整未來段落
+                            return (
+                                <LinePathSegment
+                                    key={`fut-${li}-${si}`}
+                                    points={seg.points}
+                                    color="#4a5568"
+                                    opacity={0.35}
+                                />
+                            )
+                        })}
+                    </group>
+                )
+            })}
+        </group>
+    )
 }
 
 // 單層渲染（支持熱點圖）
@@ -276,6 +311,10 @@ export default function PathRenderer() {
         ? { layerIndex: visibleLayers.length, segmentIndex: -1, pointIndex: -1 }
         : calculateVisibleProgress(visibleLayers, animation.progress, totalPoints)
 
+    // 動畫中（0 < progress < 1）才顯示噴頭游標與未來虛影
+    const isAnimating = animation.progress > 0 && animation.progress < 1
+    const nozzlePos = isAnimating ? getNozzlePosition(visibleLayers, visibleProgress) : null
+
     return (
         <group>
             {compareMode && originalPathData && (
@@ -283,6 +322,15 @@ export default function PathRenderer() {
                     pathData={originalPathData}
                     startLayer={startLayer}
                     endLayer={endLayer}
+                />
+            )}
+
+            {/* 未來路徑虛影（暗灰色） */}
+            {isAnimating && (
+                <FutureSegmentsOverlay
+                    layers={visibleLayers}
+                    visibleProgress={visibleProgress}
+                    showTravelMoves={showTravelMoves}
                 />
             )}
 
@@ -305,6 +353,15 @@ export default function PathRenderer() {
                     />
                 )
             })}
+
+            {/* 噴頭游標 */}
+            {nozzlePos && (
+                <NozzleCursor
+                    position={nozzlePos}
+                    radius={nozzleRadius}
+                    isTravel={nozzlePos.isTravel}
+                />
+            )}
         </group>
     )
 }
