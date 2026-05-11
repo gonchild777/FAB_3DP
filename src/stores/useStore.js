@@ -73,6 +73,19 @@ const useStore = create((set) => ({
     // 編輯器狀態
     isProfileEditorOpen: false,
 
+    // 路徑優化
+    originalPathData: null,    // 優化前備份（供比較模式使用）
+    optimizationSettings: {
+        sortAlgorithm: 'nn_2opt',    // 'nn' | 'nn_2opt' | 'nn_oropt' | 'sa'
+        useReversal: true,
+        useSeam: true,
+        seamMode: 'nearest',         // 'nearest' | 'corner' | 'random'
+        useVisibilityGraph: false,
+    },
+    optimizationResult: null,  // 最後一次優化的 stats
+    isOptimizing: false,
+    compareMode: false,        // 是否同時顯示優化前/後
+
     // 動畫控制
     animation: {
         isPlaying: false,          // 是否正在播放
@@ -132,6 +145,23 @@ const useStore = create((set) => ({
     })),
     resetAnimation: () => set((state) => ({
         animation: { ...state.animation, isPlaying: false, progress: 0 }
+    })),
+
+    // 路徑優化 Actions
+    setOriginalPathData: (data) => set({ originalPathData: data }),
+    updateOptimizationSetting: (key, value) => set((state) => ({
+        optimizationSettings: { ...state.optimizationSettings, [key]: value }
+    })),
+    setOptimizationSettings: (settings) => set((state) => ({
+        optimizationSettings: { ...state.optimizationSettings, ...settings }
+    })),
+    setOptimizationResult: (result) => set({ optimizationResult: result }),
+    setIsOptimizing: (flag) => set({ isOptimizing: flag }),
+    setCompareMode: (flag) => set({ compareMode: flag }),
+    revertOptimization: () => set((state) => ({
+        pathData: state.originalPathData ?? state.pathData,
+        optimizationResult: null,
+        compareMode: false,
     })),
 
     // 自定義配置 Actions

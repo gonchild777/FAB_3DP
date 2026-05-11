@@ -3,7 +3,15 @@
  * 處理耗時運算：JSON 解析、懸臂分析、G-code 生成、路徑優化
  */
 
-// 消息處理器
+import { optimize as nnOptimize } from '../core/algorithms/nearestNeighbor.js'
+import { optimize as twoOptOptimize } from '../core/algorithms/twoOpt.js'
+import { optimize as orOptOptimize } from '../core/algorithms/orOpt.js'
+import { optimize as saOptimize } from '../core/algorithms/simulatedAnnealing.js'
+import { optimizeSeams } from '../core/algorithms/seamOptimizer.js'
+import { optimize as reversalOptimize } from '../core/algorithms/segmentReversal.js'
+import { rebuildTravelMoves } from '../core/algorithms/visibilityGraph.js'
+import { splitLayerSegments, rebuildWithTravels, totalTravelDistance, ORIGIN } from '../core/algorithms/common.js'
+
 self.onmessage = function (e) {
     const { type, payload, taskId } = e.data
 
@@ -28,31 +36,16 @@ self.onmessage = function (e) {
                 throw new Error(`Unknown task type: ${type}`)
         }
     } catch (error) {
-        self.postMessage({
-            type: 'ERROR',
-            taskId,
-            error: error.message
-        })
+        self.postMessage({ type: 'ERROR', taskId, error: error.message })
     }
 }
 
-// 發送進度更新
 function reportProgress(taskId, progress, message = '') {
-    self.postMessage({
-        type: 'PROGRESS',
-        taskId,
-        progress,
-        message
-    })
+    self.postMessage({ type: 'PROGRESS', taskId, progress, message })
 }
 
-// 發送任務完成
 function reportComplete(taskId, result) {
-    self.postMessage({
-        type: 'COMPLETE',
-        taskId,
-        result
-    })
+    self.postMessage({ type: 'COMPLETE', taskId, result })
 }
 
 /**
@@ -60,21 +53,16 @@ function reportComplete(taskId, result) {
  */
 function handleParseJson(payload, taskId) {
     reportProgress(taskId, 0, '開始解析 JSON...')
-
     const { jsonString } = payload
     const data = JSON.parse(jsonString)
-
     reportProgress(taskId, 50, '驗證數據結構...')
 
-    // 驗證必要欄位
     if (!data.header || !data.layers) {
         throw new Error('無效的 JSON 格式：缺少 header 或 layers')
     }
 
-    // 計算統計數據
     let totalPoints = 0
     let totalSegments = 0
-
     for (const layer of data.layers) {
         for (const segment of layer.segments) {
             totalSegments++
@@ -85,11 +73,7 @@ function handleParseJson(payload, taskId) {
     reportProgress(taskId, 100, '解析完成')
     reportComplete(taskId, {
         data,
-        stats: {
-            totalLayers: data.layers.length,
-            totalSegments,
-            totalPoints
-        }
+        stats: { totalLayers: data.layers.length, totalSegments, totalPoints }
     })
 }
 
@@ -98,16 +82,12 @@ function handleParseJson(payload, taskId) {
  */
 function handleAnalyzeOverhang(payload, taskId) {
     const { pathData } = payload
-
-    if (!pathData || !pathData.layers) {
-        throw new Error('無效的路徑數據')
-    }
+    if (!pathData || !pathData.layers) throw new Error('無效的路徑數據')
 
     const layerHeight = pathData.header?.layer_height || 6
     const layers = pathData.layers
     const sortedLayers = [...layers].sort((a, b) => a.layer_index - b.layer_index)
 
-    // 收集每層點集
     const layerPointsCache = new Map()
     for (const layer of sortedLayers) {
         const points = []
@@ -151,7 +131,6 @@ function handleAnalyzeOverhang(payload, taskId) {
         reportProgress(taskId, Math.round((processedLayers / sortedLayers.length) * 100), `分析圖層 ${processedLayers}/${sortedLayers.length}`)
     }
 
-    // 統計
     const printingAngles = pointAngles.filter(p => !p.isTravel).map(p => p.angle)
     const stats = {
         safe: printingAngles.filter(a => a <= 30).length,
@@ -169,174 +148,138 @@ function handleAnalyzeOverhang(payload, taskId) {
 }
 
 /**
- * 路徑優化（最近鄰 + 2-opt）
+ * 路徑優化（演算法管線）
+ *
+ * payload.options:
+ *   sortAlgorithm: 'nn' | 'nn_2opt' | 'nn_oropt' | 'sa' | 'none'
+ *   useReversal: boolean
+ *   useSeam: boolean
+ *   seamMode: 'nearest' | 'corner' | 'random'
+ *   useVisibilityGraph: boolean
+ *
+ * 向下相容：若收到 { mode, apply2opt }（舊版），轉換為新格式
  */
 function handleOptimizePath(payload, taskId) {
-    const { pathData, options = {} } = payload
-    const { mode = 'nearest', apply2opt = true } = options
+    const { pathData } = payload
+    let options = payload.options || {}
+
+    // 舊版相容
+    if (options.mode || 'apply2opt' in options) {
+        options = {
+            sortAlgorithm: options.apply2opt ? 'nn_2opt' : 'nn',
+            useReversal: false,
+            useSeam: false,
+            useVisibilityGraph: false,
+        }
+    }
+
+    const {
+        sortAlgorithm = 'nn_2opt',
+        useReversal = false,
+        useSeam = false,
+        seamMode = 'nearest',
+        useVisibilityGraph = false,
+    } = options
 
     reportProgress(taskId, 0, '開始路徑優化...')
 
-    const optimizedData = JSON.parse(JSON.stringify(pathData)) // 深拷貝
+    const optimizedData = JSON.parse(JSON.stringify(pathData))
     let totalOriginalDistance = 0
     let totalOptimizedDistance = 0
+    const visibilityStats = { modified: 0, kept: 0, skipped: 0 }
 
-    for (let i = 0; i < optimizedData.layers.length; i++) {
-        const layer = optimizedData.layers[i]
+    const totalLayers = optimizedData.layers.length
 
-        // 只優化列印段落（跳過空移）
-        const printSegments = layer.segments.filter(s => s.type !== 'travel' && s.is_extruding)
-        const travelSegments = layer.segments.filter(s => s.type === 'travel')
+    for (let li = 0; li < totalLayers; li++) {
+        const layer = optimizedData.layers[li]
+        const { print: printSegments } = splitLayerSegments(layer)
+        if (printSegments.length === 0) continue
 
-        if (printSegments.length <= 1) continue
+        // 起點：layer 第一段的第一點（簡化處理，視覺上從上層終點開始也可接受）
+        const startPos = ORIGIN
+        totalOriginalDistance += totalTravelDistance(printSegments, startPos)
 
-        // 計算原始空移距離
-        let currentPos = { x: 0, y: 0 }
-        for (const seg of printSegments) {
-            const start = seg.points[0]
-            totalOriginalDistance += Math.sqrt((start.x - currentPos.x) ** 2 + (start.y - currentPos.y) ** 2)
-            currentPos = seg.points[seg.points.length - 1]
+        // ─── Pipeline ───
+        let result = printSegments
+
+        // 1. 排序
+        if (sortAlgorithm === 'nn') {
+            result = nnOptimize(result, { startPos })
+        } else if (sortAlgorithm === 'nn_2opt') {
+            result = nnOptimize(result, { startPos })
+            result = twoOptOptimize(result, { startPos })
+        } else if (sortAlgorithm === 'nn_oropt') {
+            result = nnOptimize(result, { startPos })
+            result = orOptOptimize(result, { startPos })
+        } else if (sortAlgorithm === 'sa') {
+            result = nnOptimize(result, { startPos })
+            result = saOptimize(result, {
+                startPos,
+                maxIterations: 5000,
+                onProgress: (pct, msg) => {
+                    const layerPct = Math.round((li / totalLayers) * 100 + (pct * 100 / totalLayers))
+                    reportProgress(taskId, layerPct, `SA L${li + 1}/${totalLayers}: ${msg}`)
+                }
+            })
         }
 
-        // 最近鄰排序
-        const sorted = nearestNeighborSort(printSegments)
-
-        // 2-opt 改進
-        const optimized = apply2opt ? twoOptImprove(sorted) : sorted
-
-        // 計算優化後空移距離
-        currentPos = { x: 0, y: 0 }
-        for (const seg of optimized) {
-            const start = seg.points[0]
-            totalOptimizedDistance += Math.sqrt((start.x - currentPos.x) ** 2 + (start.y - currentPos.y) ** 2)
-            currentPos = seg.points[seg.points.length - 1]
+        // 2. 段落方向反轉（封閉輪廓自動跳過）
+        if (useReversal) {
+            result = reversalOptimize(result, { startPos })
         }
 
-        // 重建段落（添加空移）
-        const newSegments = []
-        currentPos = { x: 0, y: 0 }
-        for (const seg of optimized) {
-            const start = seg.points[0]
-            // 添加空移
-            if (Math.abs(start.x - currentPos.x) > 0.1 || Math.abs(start.y - currentPos.y) > 0.1) {
-                newSegments.push({
-                    type: 'travel',
-                    is_extruding: false,
-                    points: [{ ...currentPos, z: seg.points[0].z }, { ...start, z: seg.points[0].z }]
-                })
-            }
-            newSegments.push(seg)
-            currentPos = seg.points[seg.points.length - 1]
+        // 3. 接縫優化
+        if (useSeam) {
+            result = optimizeSeams(result, { mode: seamMode, startPos })
+        }
+
+        totalOptimizedDistance += totalTravelDistance(result, startPos)
+
+        // 4. 重建含空移的 segments
+        let newSegments = rebuildWithTravels(result, startPos)
+
+        // 5. Visibility Graph：在重建空移後再做幾何約束
+        if (useVisibilityGraph) {
+            const tmpLayer = { ...layer, segments: newSegments }
+            const vgResult = rebuildTravelMoves(tmpLayer, { enabled: true, fallbackToDirect: true })
+            newSegments = vgResult.segments
+            visibilityStats.modified += vgResult.stats.modified
+            visibilityStats.kept += vgResult.stats.kept
+            visibilityStats.skipped += vgResult.stats.skipped
         }
 
         layer.segments = newSegments
 
-        reportProgress(taskId, Math.round(((i + 1) / optimizedData.layers.length) * 100), `優化圖層 ${i + 1}/${optimizedData.layers.length}`)
+        reportProgress(taskId, Math.round(((li + 1) / totalLayers) * 100), `優化圖層 ${li + 1}/${totalLayers}`)
     }
 
     const improvement = totalOriginalDistance > 0
         ? ((totalOriginalDistance - totalOptimizedDistance) / totalOriginalDistance * 100).toFixed(1)
-        : 0
+        : '0'
 
     reportComplete(taskId, {
         optimizedData,
         stats: {
             originalTravelDistance: totalOriginalDistance.toFixed(1),
             optimizedTravelDistance: totalOptimizedDistance.toFixed(1),
-            improvement: `${improvement}%`
+            improvement: `${improvement}%`,
+            algorithmsUsed: {
+                sortAlgorithm,
+                useReversal,
+                useSeam,
+                seamMode: useSeam ? seamMode : null,
+                useVisibilityGraph,
+            },
+            visibilityGraph: useVisibilityGraph ? visibilityStats : null,
         }
     })
 }
 
 /**
- * 最近鄰排序
- */
-function nearestNeighborSort(segments) {
-    if (segments.length <= 1) return segments
-
-    const result = []
-    const remaining = [...segments]
-    let currentPos = { x: 0, y: 0 }
-
-    while (remaining.length > 0) {
-        let nearestIdx = 0
-        let nearestDist = Infinity
-
-        for (let i = 0; i < remaining.length; i++) {
-            const start = remaining[i].points[0]
-            const dist = Math.sqrt((start.x - currentPos.x) ** 2 + (start.y - currentPos.y) ** 2)
-            if (dist < nearestDist) {
-                nearestDist = dist
-                nearestIdx = i
-            }
-        }
-
-        const nearest = remaining.splice(nearestIdx, 1)[0]
-        result.push(nearest)
-        currentPos = nearest.points[nearest.points.length - 1]
-    }
-
-    return result
-}
-
-/**
- * 2-opt 改進
- */
-function twoOptImprove(segments, maxIterations = 100) {
-    if (segments.length <= 2) return segments
-
-    let improved = true
-    let iterations = 0
-    let current = [...segments]
-
-    while (improved && iterations < maxIterations) {
-        improved = false
-        iterations++
-
-        for (let i = 0; i < current.length - 1; i++) {
-            for (let j = i + 2; j < current.length; j++) {
-                const delta = calculate2optDelta(current, i, j)
-                if (delta < -0.1) {
-                    // 執行交換
-                    const newRoute = current.slice(0, i + 1)
-                    const reversed = current.slice(i + 1, j + 1).reverse()
-                    const rest = current.slice(j + 1)
-                    current = [...newRoute, ...reversed, ...rest]
-                    improved = true
-                }
-            }
-        }
-    }
-
-    return current
-}
-
-function calculate2optDelta(segments, i, j) {
-    const getEnd = (seg) => seg.points[seg.points.length - 1]
-    const getStart = (seg) => seg.points[0]
-    const dist = (a, b) => Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
-
-    const a = i > 0 ? getEnd(segments[i - 1]) : { x: 0, y: 0 }
-    const b = getStart(segments[i])
-    const c = getEnd(segments[j])
-    const d = j < segments.length - 1 ? getStart(segments[j + 1]) : getEnd(segments[j])
-
-    const before = dist(a, b) + dist(c, d)
-    const after = dist(a, getStart(segments[j])) + dist(getEnd(segments[i]), d)
-
-    return after - before
-}
-
-/**
- * G-code 生成
+ * G-code 生成（佔位）
  */
 function handleGenerateGcode(payload, taskId) {
     reportProgress(taskId, 0, '開始生成 G-code...')
-
-    const { pathData, printSettings, machineSettings } = payload
-    // 這裡可以複製 postProcessor 的邏輯
-    // 為了簡化，暫時返回佔位符
-
     reportProgress(taskId, 100, 'G-code 生成完成')
     reportComplete(taskId, { gcode: '; G-code generated by worker' })
 }
@@ -362,45 +305,34 @@ function handleEstimateTime(payload, taskId) {
                 const dz = points[i + 1].z - points[i].z
                 const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
 
-                if (segment.type === 'travel') {
-                    totalTravelDistance += dist
-                } else if (segment.is_extruding) {
-                    totalPrintDistance += dist
-                }
+                if (segment.type === 'travel') totalTravelDistance += dist
+                else if (segment.is_extruding) totalPrintDistance += dist
             }
         }
     }
 
-    // 轉換單位：cm -> mm
     const printDistanceMm = totalPrintDistance * 10
     const travelDistanceMm = totalTravelDistance * 10
-
-    // 時間估算（秒）
     const printTime = printDistanceMm / printSpeed
     const travelTime = travelDistanceMm / travelSpeed
     const totalSeconds = printTime + travelTime
 
-    // 材料估算
-    // 擠出截面積 = 噴頭寬度 × 層高（矩形近似）
-    const extrusionWidth = nozzleDiameter  // mm
-    const extrusionHeight = layerHeight     // mm
-    const crossSectionArea = extrusionWidth * extrusionHeight  // mm²
-
-    // 體積 = 截面積 × 列印長度（mm³）
+    const extrusionWidth = nozzleDiameter
+    const extrusionHeight = layerHeight
+    const crossSectionArea = extrusionWidth * extrusionHeight
     const volumeMm3 = crossSectionArea * printDistanceMm
-    const volumeCm3 = volumeMm3 / 1000  // cm³ = ml
-    const volumeLiters = volumeCm3 / 1000  // L
+    const volumeCm3 = volumeMm3 / 1000
+    const volumeLiters = volumeCm3 / 1000
 
-    // 線材長度估算（假設圓形線材直徑 35mm，建築列印常用）
-    const filamentDiameter = machineSettings?.filamentDiameter || 35  // mm
+    const filamentDiameter = machineSettings?.filamentDiameter || 35
     const filamentRadius = filamentDiameter / 2
-    const filamentCrossSection = Math.PI * filamentRadius * filamentRadius  // mm²
+    const filamentCrossSection = Math.PI * filamentRadius * filamentRadius
     const filamentLengthMm = volumeMm3 / filamentCrossSection
-    const filamentLengthM = filamentLengthMm / 1000  // m
+    const filamentLengthM = filamentLengthMm / 1000
 
     reportComplete(taskId, {
-        printDistance: (totalPrintDistance * 10).toFixed(1),  // mm
-        travelDistance: (totalTravelDistance * 10).toFixed(1), // mm
+        printDistance: (totalPrintDistance * 10).toFixed(1),
+        travelDistance: (totalTravelDistance * 10).toFixed(1),
         estimatedTime: {
             seconds: Math.round(totalSeconds),
             formatted: formatTime(totalSeconds)
@@ -411,7 +343,6 @@ function handleEstimateTime(payload, taskId) {
             volumeLiters: volumeLiters.toFixed(3),
             filamentLengthMm: Math.round(filamentLengthMm),
             filamentLengthM: filamentLengthM.toFixed(2),
-            // 假設混凝土密度 2.3 g/cm³
             weightKg: (volumeCm3 * 2.3 / 1000).toFixed(2)
         }
     })
@@ -421,7 +352,6 @@ function formatTime(seconds) {
     const h = Math.floor(seconds / 3600)
     const m = Math.floor((seconds % 3600) / 60)
     const s = Math.round(seconds % 60)
-
     if (h > 0) return `${h}h ${m}m ${s}s`
     if (m > 0) return `${m}m ${s}s`
     return `${s}s`

@@ -5,6 +5,7 @@ import { generateGcode } from '../../core/postProcessor'
 import { downloadGcode } from '../../utils/gcodeExporter'
 import { usePathWorker } from '../../hooks/usePathWorker'
 import { getProfileList, getProfile } from '../../core/gcodeProfiles'
+import OptimizationPanel from '../OptimizationPanel'
 
 
 // 卡片組件 - 簡約現代風格
@@ -96,11 +97,9 @@ export default function ControlPanel() {
 
 
     const [isGenerating, setIsGenerating] = useState(false)
-    const [isOptimizing, setIsOptimizing] = useState(false)
-    const [optimizeResult, setOptimizeResult] = useState(null)
     const [timeEstimate, setTimeEstimate] = useState(null)
 
-    const { optimizePath, estimateTime, progress: workerProgress, message: workerMessage } = usePathWorker()
+    const { estimateTime } = usePathWorker()
     const setPathData = useStore((state) => state.setPathData)
 
     // 計算邊界
@@ -315,48 +314,32 @@ export default function ControlPanel() {
                 </Card>
             )}
 
-            {/* 路徑優化 */}
+            {/* 路徑優化（OptimizationPanel） */}
+            {pathData && <OptimizationPanel />}
+
+            {/* 時間估算按鈕 */}
             {pathData && (
-                <Card title="路径優化" icon="⚡">
-                    <button
-                        onClick={async () => {
-                            setIsOptimizing(true)
-                            try {
-                                const result = await optimizePath(pathData, { mode: 'nearest', apply2opt: true })
-                                setOptimizeResult(result.stats)
-                                setPathData(result.optimizedData)
-                                // 同時估算時間
-                                const timeResult = await estimateTime(result.optimizedData, printSettings, machineSettings)
-                                setTimeEstimate(timeResult)
-                            } catch (err) {
-                                console.error('優化失敗:', err)
-                            }
-                            setIsOptimizing(false)
-                        }}
-                        disabled={isOptimizing}
-                        style={{
-                            width: '100%',
-                            padding: '10px',
-                            background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '8px',
-                            fontSize: '13px',
-                            fontWeight: '600',
-                            cursor: isOptimizing ? 'wait' : 'pointer',
-                            opacity: isOptimizing ? 0.7 : 1,
-                        }}
-                    >
-                        {isOptimizing ? `優化中... ${workerProgress}%` : '⚡ 執行路徑優化'}
-                    </button>
-                    {optimizeResult && (
-                        <div style={{ marginTop: '10px', fontSize: '11px', color: 'rgba(255,255,255,0.7)' }}>
-                            <div>空移距離減少: <span style={{ color: '#4ade80' }}>{optimizeResult.improvement}</span></div>
-                            <div>原始: {optimizeResult.originalTravelDistance} mm</div>
-                            <div>優化後: {optimizeResult.optimizedTravelDistance} mm</div>
-                        </div>
-                    )}
-                </Card>
+                <button
+                    onClick={async () => {
+                        try {
+                            const r = await estimateTime(pathData, printSettings, machineSettings)
+                            setTimeEstimate(r)
+                        } catch (e) { console.error(e) }
+                    }}
+                    style={{
+                        width: '100%',
+                        padding: '8px',
+                        background: 'rgba(96, 165, 250, 0.15)',
+                        color: '#93c5fd',
+                        border: '1px solid rgba(96, 165, 250, 0.3)',
+                        borderRadius: '8px',
+                        fontSize: '11px',
+                        fontWeight: '600',
+                        cursor: 'pointer',
+                    }}
+                >
+                    ⏱ 估算列印時間與材料
+                </button>
             )}
 
             {/* 時間與材料估算 */}

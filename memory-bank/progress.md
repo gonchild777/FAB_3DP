@@ -365,6 +365,56 @@
 - Phase 5: 多設備指令集、自定義編輯器
 - 額外: PWA 支援、GitHub Pages 部署
 
+## 🎉 Phase 7 完成！
+
+**Phase 7: 進階路徑優化演算法** 已全部完成！
+
+### 已實現演算法（`src/core/algorithms/`）
+
+| 模組 | 演算法 | 用途 |
+|------|--------|------|
+| `nearestNeighbor.js` | NN 貪心 | 快速粗排（從 Worker 提取） |
+| `twoOpt.js` | 2-opt 子序列反轉 | 局部最優改進（從 Worker 提取） |
+| `orOpt.js` | Or-opt（k=1,2,3） | 移動子序列到更佳位置 |
+| `simulatedAnnealing.js` | 模擬退火 | 跳出局部最優 |
+| `seamOptimizer.js` | 接縫優化 | nearest/corner/random 三模式 |
+| `segmentReversal.js` | 方向反轉 | 非封閉段落雙向選最短 |
+| `visibilityGraph.js` | **幾何約束空移** | Dijkstra + 可視圖，繞行幾何體內部 |
+| `common.js` | 共用工具 | distance、splitLayerSegments、rebuildWithTravels |
+
+### 已實現功能
+
+1. **OptimizationPanel** (`src/components/OptimizationPanel/index.jsx`)
+   - 排序演算法 4 選 1（單選 RadioOption）
+   - 輔助優化 3 項複選（反轉、接縫、幾何約束）
+   - 接縫模式三按鈕切換
+   - 結果統計卡片（改善百分比、原始/優化距離、VG 繞行段數）
+   - 比較模式切換、還原原始按鈕
+
+2. **PathRenderer 比較模式**
+   - 新增 `OriginalOverlay` 子組件
+   - 紅色半透明線條顯示原始路徑
+   - 與優化後路徑（綠色）疊加顯示
+
+3. **Store 擴充**
+   - `originalPathData`、`optimizationSettings`、`optimizationResult`、`isOptimizing`、`compareMode`
+   - 完整 actions + `revertOptimization`
+
+4. **pathWorker 演算法管線**
+   - `OPTIMIZE_PATH` task 改為接收 `{ sortAlgorithm, useReversal, useSeam, seamMode, useVisibilityGraph }`
+   - 完整 pipeline：排序 → 反轉 → 接縫 → 重建空移 → VG 幾何約束
+   - 舊版 `{ mode, apply2opt }` 自動轉換（向下相容）
+
+### 驗證結果
+- ✅ NN 對 5 段亂序輸入：250 → 45 cm（最優）
+- ✅ Reversal 對 1 段測試：90 → 10 cm（反轉生效）
+- ✅ VG 對凸形（square）：modified=0（保留直線）
+- ✅ VG 對 C 字形：modified=1（路徑 (10,10) → (30,70) → (90,90) 繞行）
+- ✅ end-to-end：sample-print.gcode → parse → optimize → VG 全流程跑通
+- ✅ npm run build 通過（worker bundle 5KB → 11.8KB）
+
+---
+
 ## 🎉 Phase 6 完成！
 
 **Phase 6: G-code 檔案輸入與解析** 已全部完成！

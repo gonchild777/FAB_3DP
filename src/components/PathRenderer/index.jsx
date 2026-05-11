@@ -214,9 +214,40 @@ function LayerRenderer({
     )
 }
 
+// 原始路徑覆蓋層（比較模式用，紅色半透明線條）
+function OriginalOverlay({ pathData, startLayer, endLayer }) {
+    if (!pathData?.layers) return null
+
+    const visibleLayers = pathData.layers.filter(
+        (l) => l.layer_index >= startLayer && l.layer_index <= endLayer
+    )
+
+    return (
+        <group>
+            {visibleLayers.map((layer) => (
+                <group key={`orig-${layer.layer_index}`}>
+                    {layer.segments.map((segment, si) => {
+                        if (segment.type !== 'travel' && !segment.is_extruding) return null
+                        return (
+                            <LinePathSegment
+                                key={`orig-s-${si}`}
+                                points={segment.points}
+                                color={segment.type === 'travel' ? '#fca5a5' : '#ef4444'}
+                                opacity={segment.type === 'travel' ? 0.25 : 0.4}
+                            />
+                        )
+                    })}
+                </group>
+            ))}
+        </group>
+    )
+}
+
 // 主渲染器
 export default function PathRenderer() {
     const pathData = useStore((state) => state.pathData)
+    const originalPathData = useStore((state) => state.originalPathData)
+    const compareMode = useStore((state) => state.compareMode)
     const startLayer = useStore((state) => state.startLayer)
     const endLayer = useStore((state) => state.endLayer)
     const showTravelMoves = useStore((state) => state.showTravelMoves)
@@ -247,6 +278,14 @@ export default function PathRenderer() {
 
     return (
         <group>
+            {compareMode && originalPathData && (
+                <OriginalOverlay
+                    pathData={originalPathData}
+                    startLayer={startLayer}
+                    endLayer={endLayer}
+                />
+            )}
+
             {visibleLayers.map((layer, layerArrayIndex) => {
                 if (layerArrayIndex > visibleProgress.layerIndex) return null
                 const isLastVisibleLayer = layerArrayIndex === visibleProgress.layerIndex
