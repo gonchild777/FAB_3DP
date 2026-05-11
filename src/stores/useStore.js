@@ -3,6 +3,7 @@ import { create } from 'zustand'
 const useStore = create((set) => ({
     // 專案數據
     pathData: null,
+    sourceType: null,   // 'json' | 'gcode' | null（資料來源）
 
     // 視覺化設定 - 圖層範圍
     startLayer: 0,
@@ -83,6 +84,7 @@ const useStore = create((set) => ({
 
     // Actions
     setPathData: (data) => set({ pathData: data }),
+    setSourceType: (type) => set({ sourceType: type }),
     setStartLayer: (layer) => set({ startLayer: layer }),
     setEndLayer: (layer) => set({ endLayer: layer }),
     setLayerRange: (start, end) => set({ startLayer: start, endLayer: end }),

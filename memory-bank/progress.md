@@ -365,6 +365,36 @@
 - Phase 5: 多設備指令集、自定義編輯器
 - 額外: PWA 支援、GitHub Pages 部署
 
+## 🎉 Phase 6 完成！
+
+**Phase 6: G-code 檔案輸入與解析** 已全部完成！
+
+### ✅ Step 6.1-6.4 - G-code Parser 與 UI 整合
+
+**完成日期**: 2026-05-11
+
+**執行內容**:
+1. 建立 `src/core/gcodeParser.js`：
+   - 完整 G-code 狀態機（G0/G1/G90/G91/G92/M82/M83）
+   - 自動單位偵測（最大座標 > 500 視為 mm，自動換算為 cm）
+   - 層偵測：優先 `;LAYER:n` / `;LAYER_CHANGE` 註解，次要 Z 變化
+   - 中繼資料解析：nozzle_diameter、layer_height、flavor
+   - 回抽（純 E 變化）自動忽略
+2. 更新 `src/components/FileUploader/index.jsx`：
+   - 支援 `.json` / `.gcode` / `.gco` / `.nc`
+   - 副檔名分流，自動選擇對應解析器
+   - 顯示來源徽章（JSON / G-code）
+3. Store 新增 `sourceType` 狀態與 `setSourceType` action
+4. 建立 `public/sample-print.gcode`（3 層 1200×1200mm 正方形）
+
+**驗證結果**:
+- ✅ sample-print.gcode 解析後 3 層、6 列印段、6 空移段，Z = 4/8/12 cm（mm → cm 換算正確）
+- ✅ Cura 風格（M83 相對擠出 + 回抽）正確處理
+- ✅ 解析結果格式與 sample-path.json 完全相容，PathRenderer 無需修改
+- ✅ 來源徽章正確顯示 JSON / G-code
+
+---
+
 ### ✅ 額外功能 - Config.ini 導入
 
 **完成日期**: 2026-01-18
