@@ -365,6 +365,67 @@
 - Phase 5: 多設備指令集、自定義編輯器
 - 額外: PWA 支援、GitHub Pages 部署
 
+## 🚧 Phase 9：障礙物避開
+
+**完成日期**: 2026-05-12
+
+> **需求**: 可以上傳障礙物幾何模型（STL / OBJ / 原型幾何體），讓列印路徑的空移完全避開這些障礙物。
+
+### 已實現功能
+
+1. **障礙物載入器** (`src/core/obstacleLoader.js`)
+   - STL：自動偵測二進位 / ASCII 格式
+   - OBJ：支援 `v` / `f`，自動三角化多邊形 face，支援多種 face 格式（`f 1 2 3`、`f 1/2 3/4`、`f 1//3` 等）
+   - 統一輸出格式：`{ vertices, indices, triangleCount, bbox }`
+
+2. **原型幾何體** (`src/core/obstaclePrimitives.js`)
+   - `createBoxMesh({ width, depth, height, x, y, z })`：12 三角形
+   - `createCylinderMesh({ radius, height, x, y, z, segments })`：可調精度
+
+3. **網格切層器** (`src/core/obstacleSlicer.js`)
+   - `sliceMeshAtZ(mesh, z)`：每三角形與水平面求交，鏈接成多邊形
+   - `sliceAllObstaclesPerLayer`：批次處理所有障礙物 × 所有層
+
+4. **3D 渲染** (`src/components/ObstacleRenderer/index.jsx`)
+   - 半透明紅色 mesh + 線框
+   - 自動座標系轉換（內部 z-up → Three.js y-up）
+   - 整合進 Canvas3D
+
+5. **ObstaclePanel UI** (`src/components/ObstaclePanel/index.jsx`)
+   - STL/OBJ 檔案上傳
+   - Box/Cylinder 原型表單（寬深高、半徑、中心座標）
+   - 障礙物列表（每項顯示色塊、名稱、三角形數、可見性切換、刪除）
+   - 設定：場景顯示、優化時避開、安全邊距（inflation）
+   - 「清空全部」按鈕
+
+6. **可視圖擴充** (`src/core/algorithms/visibilityGraph.js`)
+   - `isVisible(a, b, polygon, obstacles)`：新增障礙物穿越/包含檢查
+   - `buildVisibilityGraph(polygon, extra, obstacles)`：節點集擴展到障礙物頂點
+   - `rebuildTravelMoves` 新增 `obstaclePolygons` 參數與 `obstacleAvoided` 統計
+
+7. **Worker pipeline 整合** (`src/workers/pathWorker.js`)
+   - 接收 `obstaclePolygonsByLayer`（主執行緒預切片）
+   - 即使未啟用 Visibility Graph，只要有障礙物也會自動繞行
+   - 回報 `obstacleAvoidance: { layersWithObstacles, travelsAvoided }`
+
+8. **OptimizationPanel 整合**
+   - 優化前主執行緒切片所有可見障礙物（每層）
+   - 套用 inflation 膨脹（基於質心向外推）
+   - 結果卡片新增「🚧 障礙物避開」區塊：受影響層數、繞道段數
+
+9. **Store 擴充**
+   - `obstacles[]`、`obstacleSettings: { showInScene, avoidInOptimization, inflation }`
+   - Actions: `addObstacle` / `removeObstacle` / `updateObstacle` / `clearObstacles` / `updateObstacleSetting`
+
+### 驗證結果
+- ✅ Box 20×20×5 STL 切片 z=1 → 1 個方形多邊形
+- ✅ 圓柱切片 → 1 個近似圓多邊形
+- ✅ End-to-end 測試：travel (10,10)→(90,90) 穿越中央 20×20 障礙物 → 自動繞行 (10,10)→(40,60)→(90,90)
+- ✅ Stats 正確：modified=1, obstacleAvoided=1
+- ✅ npm run build 通過
+
+---
+
 ## 🔒 Phase 8.5：G-code 保留模式
 
 **完成日期**: 2026-05-12

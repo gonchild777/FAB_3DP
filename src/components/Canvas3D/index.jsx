@@ -2,6 +2,7 @@ import { Canvas } from '@react-three/fiber'
 import { OrbitControls, GizmoHelper, GizmoViewport } from '@react-three/drei'
 import * as THREE from 'three'
 import PathRenderer from '../PathRenderer'
+import ObstacleRenderer from '../ObstacleRenderer'
 
 // 自定義網格地面組件
 function GridFloor() {
@@ -32,6 +33,9 @@ function Scene() {
 
             {/* 路徑渲染器 */}
             <PathRenderer />
+
+            {/* 障礙物渲染器 */}
+            <ObstacleRenderer />
 
             {/* 環境光 - 增強 */}
             <ambientLight intensity={0.6} />

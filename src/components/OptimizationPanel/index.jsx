@@ -5,6 +5,26 @@
 import { useState } from 'react'
 import useStore from '../../stores/useStore'
 import { usePathWorker } from '../../hooks/usePathWorker'
+import { sliceMeshAtZ } from '../../core/obstacleSlicer'
+
+/**
+ * 簡易多邊形膨脹：從質心向外推每個頂點
+ * 適用於凸/近似凸的障礙物切片
+ */
+function inflatePolygon(polygon, amount) {
+    if (!amount || amount <= 0) return polygon
+    let cx = 0, cy = 0
+    for (const p of polygon) { cx += p.x; cy += p.y }
+    cx /= polygon.length; cy /= polygon.length
+    return polygon.map(p => {
+        const dx = p.x - cx
+        const dy = p.y - cy
+        const len = Math.sqrt(dx * dx + dy * dy)
+        if (len < 1e-6) return { ...p }
+        const factor = (len + amount) / len
+        return { x: cx + dx * factor, y: cy + dy * factor }
+    })
+}
 
 const SORT_ALGORITHMS = [
     { id: 'nn', label: 'Nearest Neighbor', desc: '快速貪心，30-50% 改善' },
@@ -144,6 +164,8 @@ export default function OptimizationPanel() {
 
     const isGcodeSource = sourceType === 'gcode'
     const canOptimize = !!pathData && !isOptimizing
+    const obstacles = useStore((s) => s.obstacles)
+    const obstacleSettings = useStore((s) => s.obstacleSettings)
 
     const handleOptimize = async () => {
         if (!pathData) return
@@ -153,10 +175,29 @@ export default function OptimizationPanel() {
             if (!originalPathData) setOriginalPathData(pathData)
 
             const baseData = originalPathData ?? pathData
-            // G-code 來源：自動啟用 preserveDirection
+
+            // 障礙物：在主執行緒切片，避免將大型 mesh 傳給 worker
+            let obstaclePolygonsByLayer = null
+            if (obstacles.length > 0 && obstacleSettings.avoidInOptimization) {
+                obstaclePolygonsByLayer = {}
+                const visibleObstacles = obstacles.filter(o => o.visible !== false)
+                for (const layer of baseData.layers) {
+                    const polys = []
+                    for (const obs of visibleObstacles) {
+                        const slices = sliceMeshAtZ(obs, layer.z_height)
+                        for (const s of slices) {
+                            const inflated = inflatePolygon(s, obstacleSettings.inflation)
+                            polys.push(inflated)
+                        }
+                    }
+                    if (polys.length > 0) obstaclePolygonsByLayer[layer.layer_index] = polys
+                }
+            }
+
             const effectiveOptions = {
                 ...settings,
                 preserveDirection: isGcodeSource,
+                obstaclePolygonsByLayer,
             }
             const result = await optimizePath(baseData, effectiveOptions)
             setPathData(result.optimizedData)
@@ -337,6 +378,21 @@ export default function OptimizationPanel() {
                                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                     <span style={{ color: 'rgba(255,255,255,0.5)' }}>保留直線</span>
                                     <span>{optimizationResult.visibilityGraph.kept} 段</span>
+                                </div>
+                            </div>
+                        )}
+                        {optimizationResult.obstacleAvoidance && (
+                            <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(239,68,68,0.2)' }}>
+                                <div style={{ fontSize: '10px', color: '#fca5a5', marginBottom: '4px' }}>
+                                    🚧 障礙物避開
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <span style={{ color: 'rgba(255,255,255,0.5)' }}>受影響層數</span>
+                                    <span style={{ color: '#fca5a5' }}>{optimizationResult.obstacleAvoidance.layersWithObstacles}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <span style={{ color: 'rgba(255,255,255,0.5)' }}>繞道避開</span>
+                                    <span style={{ color: '#fca5a5' }}>{optimizationResult.obstacleAvoidance.travelsAvoided} 段</span>
                                 </div>
                             </div>
                         )}

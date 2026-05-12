@@ -115,29 +115,45 @@ export function extractLayerPolygon(layer) {
 /* ─────────────  可視圖  ───────────── */
 
 /**
- * 兩節點是否可見：連線在多邊形內且不穿越邊界
+ * 兩節點是否可見：連線在外輪廓內，且不穿越外輪廓邊界，
+ * 且不進入任何障礙物多邊形
  */
-function isVisible(a, b, polygon) {
+function isVisible(a, b, polygon, obstacles = []) {
     if (Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) < EPS) return true
-    if (travelCrossesPolygon(a, b, polygon)) return false
+    if (polygon && travelCrossesPolygon(a, b, polygon)) return false
 
-    // 中點需在多邊形內（防止外凸區域被誤判）
+    // 中點需在外輪廓內
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
-    return pointInPolygon(mid, polygon)
+    if (polygon && !pointInPolygon(mid, polygon)) return false
+
+    // 不可穿越任何障礙物
+    for (const obs of obstacles) {
+        if (travelCrossesPolygon(a, b, obs)) return false
+        // 線段中點不能在障礙物內
+        if (pointInPolygon(mid, obs)) return false
+    }
+    return true
 }
 
 /**
- * 建立可視圖：節點 = 多邊形頂點 + 額外點（A、B）
- * 回傳 { nodes: [{x,y}], edges: Map<nodeIdx, [{to, dist}]> }
+ * 建立可視圖：節點 = 外輪廓頂點 + 障礙物頂點 + 額外點（A、B）
+ * @param {Array} polygon - 外輪廓多邊形（可為 null）
+ * @param {Array} extraPoints - A、B 等額外節點
+ * @param {Array<Array>} obstacles - 障礙物多邊形陣列
  */
-export function buildVisibilityGraph(polygon, extraPoints = []) {
-    const nodes = [...polygon, ...extraPoints]
+export function buildVisibilityGraph(polygon, extraPoints = [], obstacles = []) {
+    const polyNodes = polygon ? [...polygon] : []
+    const obstacleNodes = []
+    for (const obs of obstacles) {
+        for (const v of obs) obstacleNodes.push(v)
+    }
+    const nodes = [...polyNodes, ...obstacleNodes, ...extraPoints]
     const edges = new Map()
     for (let i = 0; i < nodes.length; i++) edges.set(i, [])
 
     for (let i = 0; i < nodes.length; i++) {
         for (let j = i + 1; j < nodes.length; j++) {
-            if (isVisible(nodes[i], nodes[j], polygon)) {
+            if (isVisible(nodes[i], nodes[j], polygon, obstacles)) {
                 const d = dist2D(nodes[i], nodes[j])
                 edges.get(i).push({ to: j, dist: d })
                 edges.get(j).push({ to: i, dist: d })
@@ -194,26 +210,29 @@ export function dijkstra(graph, sourceIdx, targetIdx) {
 /* ─────────────  主入口  ───────────── */
 
 /**
- * 對一層的 segments 重建空移，使空移路徑保留在多邊形內部
+ * 對一層的 segments 重建空移：保留在外輪廓內 + 避開障礙物
  *
  * @param {object} layer  - 含 segments 的 layer
  * @param {object} options
- *   - enabled: boolean (預設 true)
- *   - fallbackToDirect: boolean - 多邊形無法提取時是否保留原空移 (預設 true)
+ *   - enabled: boolean
+ *   - fallbackToDirect: boolean
+ *   - obstaclePolygons: Array<Array<{x,y}>> 此層的障礙物多邊形列表
  *
- * @returns {object} { segments: 新 segments, stats: { modified, kept, skipped } }
+ * @returns {object} { segments, stats: { modified, kept, skipped, obstacleAvoided } }
  */
 export function rebuildTravelMoves(layer, options = {}) {
-    const { enabled = true, fallbackToDirect = true } = options
-    const stats = { modified: 0, kept: 0, skipped: 0 }
+    const { enabled = true, fallbackToDirect = true, obstaclePolygons = [] } = options
+    const stats = { modified: 0, kept: 0, skipped: 0, obstacleAvoided: 0 }
 
     if (!enabled || !layer?.segments) {
         return { segments: layer?.segments ?? [], stats }
     }
 
     const polygon = extractLayerPolygon(layer)
-    if (!polygon || polygon.length < 3) {
-        if (!fallbackToDirect) stats.skipped = layer.segments.filter(s => s.type === 'travel').length
+    const hasObstacles = obstaclePolygons.length > 0
+
+    // 沒外輪廓也沒障礙物 → 不做事
+    if ((!polygon || polygon.length < 3) && !hasObstacles) {
         return { segments: layer.segments, stats }
     }
 
@@ -231,22 +250,33 @@ export function rebuildTravelMoves(layer, options = {}) {
         const start = getStart(seg)
         const end = getEnd(seg)
 
-        // 起或終點不在多邊形內 → 無法保證內部繞行，保留原始
-        if (!pointInPolygon(start, polygon) || !pointInPolygon(end, polygon)) {
-            newSegments.push(seg)
-            stats.skipped++
-            continue
+        // 若有外輪廓且起或終點在外輪廓外 → 保留原樣（不能保證能繞行）
+        if (polygon && polygon.length >= 3) {
+            if (!pointInPolygon(start, polygon) || !pointInPolygon(end, polygon)) {
+                newSegments.push(seg)
+                stats.skipped++
+                continue
+            }
         }
 
-        // 直線不穿越 → 保留原始
-        if (!travelCrossesPolygon(start, end, polygon)) {
+        // 是否需要繞行：穿越外輪廓 OR 穿越任何障礙物
+        const crossesBoundary = polygon ? travelCrossesPolygon(start, end, polygon) : false
+        let crossesObstacle = false
+        for (const obs of obstaclePolygons) {
+            if (travelCrossesPolygon(start, end, obs) || pointInPolygon(start, obs) || pointInPolygon(end, obs)) {
+                crossesObstacle = true
+                break
+            }
+        }
+
+        if (!crossesBoundary && !crossesObstacle) {
             newSegments.push(seg)
             stats.kept++
             continue
         }
 
-        // 需繞行
-        const graph = buildVisibilityGraph(polygon, [start, end])
+        // 需繞行：用可視圖找最短路徑
+        const graph = buildVisibilityGraph(polygon ?? null, [start, end], obstaclePolygons)
         const sIdx = graph.nodes.length - 2
         const tIdx = graph.nodes.length - 1
         const path = dijkstra(graph, sIdx, tIdx)
@@ -257,13 +287,13 @@ export function rebuildTravelMoves(layer, options = {}) {
             continue
         }
 
-        // 替換為多點空移
         newSegments.push({
             type: 'travel',
             is_extruding: false,
             points: path.map(p => ({ x: p.x, y: p.y, z })),
         })
         stats.modified++
+        if (crossesObstacle) stats.obstacleAvoided++
     }
 
     return { segments: newSegments, stats }

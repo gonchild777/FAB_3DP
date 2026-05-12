@@ -7,6 +7,7 @@ import { downloadGcode } from '../../utils/gcodeExporter'
 import { usePathWorker } from '../../hooks/usePathWorker'
 import { getProfileList, getProfile } from '../../core/gcodeProfiles'
 import OptimizationPanel from '../OptimizationPanel'
+import ObstaclePanel from '../ObstaclePanel'
 
 
 // 卡片組件 - 簡約現代風格
@@ -324,6 +325,9 @@ export default function ControlPanel() {
                     </div>
                 </Card>
             )}
+
+            {/* 障礙物管理 */}
+            <ObstaclePanel />
 
             {/* 路徑優化（OptimizationPanel） */}
             {pathData && <OptimizationPanel />}

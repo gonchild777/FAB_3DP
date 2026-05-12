@@ -73,6 +73,14 @@ const useStore = create((set) => ({
     // 編輯器狀態
     isProfileEditorOpen: false,
 
+    // 障礙物
+    obstacles: [],             // [{ id, name, type, vertices, indices, bbox, color, visible }]
+    obstacleSettings: {
+        showInScene: true,
+        avoidInOptimization: true,
+        inflation: 0,          // cm，安全邊距（多邊形外擴）
+    },
+
     // 路徑優化
     originalPathData: null,    // 優化前備份（供比較模式使用）
     optimizationSettings: {
@@ -145,6 +153,21 @@ const useStore = create((set) => ({
     })),
     resetAnimation: () => set((state) => ({
         animation: { ...state.animation, isPlaying: false, progress: 0 }
+    })),
+
+    // 障礙物 Actions
+    addObstacle: (obstacle) => set((state) => ({
+        obstacles: [...state.obstacles, obstacle],
+    })),
+    removeObstacle: (id) => set((state) => ({
+        obstacles: state.obstacles.filter((o) => o.id !== id),
+    })),
+    updateObstacle: (id, updates) => set((state) => ({
+        obstacles: state.obstacles.map((o) => o.id === id ? { ...o, ...updates } : o),
+    })),
+    clearObstacles: () => set({ obstacles: [] }),
+    updateObstacleSetting: (key, value) => set((state) => ({
+        obstacleSettings: { ...state.obstacleSettings, [key]: value },
     })),
 
     // 路徑優化 Actions

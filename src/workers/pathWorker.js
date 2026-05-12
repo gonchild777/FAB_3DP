@@ -179,8 +179,14 @@ function handleOptimizePath(payload, taskId) {
         useSeam = false,
         seamMode = 'nearest',
         useVisibilityGraph = false,
-        preserveDirection = false,  // G-code 模式自動為 true，禁用會改變方向/接縫的操作
+        preserveDirection = false,
+        obstaclePolygonsByLayer = null,  // 障礙物切片（layer_index → polygon[]），若有則啟用避開
     } = options
+
+    const obstacleMap = obstaclePolygonsByLayer
+        ? new Map(Object.entries(obstaclePolygonsByLayer).map(([k, v]) => [parseInt(k, 10), v]))
+        : new Map()
+    const hasObstacles = obstacleMap.size > 0
 
     reportProgress(taskId, 0, '開始路徑優化...')
 
@@ -191,7 +197,7 @@ function handleOptimizePath(payload, taskId) {
     const optimizedData = JSON.parse(JSON.stringify(pathData))
     let totalOriginalDistance = 0
     let totalOptimizedDistance = 0
-    const visibilityStats = { modified: 0, kept: 0, skipped: 0 }
+    const visibilityStats = { modified: 0, kept: 0, skipped: 0, obstacleAvoided: 0 }
 
     const totalLayers = optimizedData.layers.length
 
@@ -244,14 +250,20 @@ function handleOptimizePath(payload, taskId) {
         // 4. 重建含空移的 segments
         let newSegments = rebuildWithTravels(result, startPos)
 
-        // 5. Visibility Graph：在重建空移後再做幾何約束
-        if (useVisibilityGraph) {
+        // 5. Visibility Graph：在重建空移後做幾何約束（含障礙物避開）
+        const obstaclePolygons = obstacleMap.get(layer.layer_index) ?? []
+        if (useVisibilityGraph || obstaclePolygons.length > 0) {
             const tmpLayer = { ...layer, segments: newSegments }
-            const vgResult = rebuildTravelMoves(tmpLayer, { enabled: true, fallbackToDirect: true })
+            const vgResult = rebuildTravelMoves(tmpLayer, {
+                enabled: true,
+                fallbackToDirect: true,
+                obstaclePolygons,
+            })
             newSegments = vgResult.segments
             visibilityStats.modified += vgResult.stats.modified
             visibilityStats.kept += vgResult.stats.kept
             visibilityStats.skipped += vgResult.stats.skipped
+            visibilityStats.obstacleAvoided += (vgResult.stats.obstacleAvoided ?? 0)
         }
 
         layer.segments = newSegments
@@ -277,7 +289,11 @@ function handleOptimizePath(payload, taskId) {
                 useVisibilityGraph,
                 preserveDirection,
             },
-            visibilityGraph: useVisibilityGraph ? visibilityStats : null,
+            visibilityGraph: (useVisibilityGraph || hasObstacles) ? visibilityStats : null,
+            obstacleAvoidance: hasObstacles ? {
+                layersWithObstacles: obstacleMap.size,
+                travelsAvoided: visibilityStats.obstacleAvoided,
+            } : null,
         }
     })
 }
