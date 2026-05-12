@@ -25,6 +25,8 @@ export function optimize(segments, options = {}) {
 
     if (segments.length <= 2) return [...segments]
 
+    const preserveDirection = options.preserveDirection ?? false
+
     let current = [...segments]
     let currentCost = totalTravelDistance(current, startPos)
     let best = [...current]
@@ -34,8 +36,8 @@ export function optimize(segments, options = {}) {
     let iter = 0
 
     while (temp > minTemp && iter < maxIterations) {
-        // 兩種鄰域操作：swap 或 reverse
-        const op = rng() < 0.5 ? 'swap' : 'reverse'
+        // preserveDirection=true → 只用 swap；否則 swap + reverse 各半
+        const op = preserveDirection ? 'swap' : (rng() < 0.5 ? 'swap' : 'reverse')
         const next = [...current]
 
         if (op === 'swap') {

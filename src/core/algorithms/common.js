@@ -55,31 +55,32 @@ export function splitLayerSegments(layer) {
 /**
  * 將排序後的列印段重建為含空移的完整 segments 陣列
  * 空移距離 < threshold 時不插入空移
+ * Z 變化（換層）一律插入 travel 確保抬升動作不遺失
  */
 export function rebuildWithTravels(printSegments, startPos = ORIGIN, threshold = 0.01) {
     const result = []
-    let currentPos = startPos
-    let currentZ = printSegments[0]?.points[0]?.z ?? 0
+    let currentPos = { x: startPos.x, y: startPos.y, z: startPos.z ?? 0 }
 
     for (const seg of printSegments) {
         const start = getStart(seg)
-        const segZ = start.z ?? currentZ
-        const travelDist = dist2D(currentPos, start)
+        const segZ = start.z ?? currentPos.z
+        const xyDist = dist2D(currentPos, start)
+        const zChanged = Math.abs((currentPos.z ?? 0) - segZ) > threshold
 
-        if (travelDist > threshold) {
+        if (xyDist > threshold || zChanged) {
             result.push({
                 type: 'travel',
                 is_extruding: false,
                 points: [
-                    { x: currentPos.x, y: currentPos.y, z: segZ },
+                    { x: currentPos.x, y: currentPos.y, z: currentPos.z ?? segZ },
                     { x: start.x, y: start.y, z: segZ },
                 ],
             })
         }
 
         result.push(seg)
-        currentPos = getEnd(seg)
-        currentZ = currentPos.z ?? currentZ
+        const end = getEnd(seg)
+        currentPos = { x: end.x, y: end.y, z: end.z ?? segZ }
     }
 
     return result

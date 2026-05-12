@@ -365,6 +365,53 @@
 - Phase 5: 多設備指令集、自定義編輯器
 - 額外: PWA 支援、GitHub Pages 部署
 
+## 🔒 Phase 8.5：G-code 保留模式
+
+**完成日期**: 2026-05-12
+
+> **需求**: 當輸入是 .gcode 檔案，路徑優化必須完整保留所有原始指令（F/E 值、M-codes、註解、列印方向、接縫位置），僅優化段落順序與空移路徑。
+
+### 實作內容
+
+1. **Parser 強化** (`src/core/gcodeParser.js`)
+   - 每個 segment 追加 `sourceLines: string[]` — 產生此段的原始 G-code 行
+   - header 新增 `preamble`（首移動前所有行）、`epilogue`（最後移動後行）
+   - 新增 `defaultTravelF` 與 `sourceScale`（重新導出時換回原單位用）
+   - `;LAYER:n` / `;LAYER_CHANGE` 標記抽到 `layer.layerHeader`（與 segments 分離，避免重排後遺失）
+
+2. **演算法 preserveDirection 模式**
+   - `twoOpt.js`：新增 swap-only 路徑（不反轉子序列），透過 `options.preserveDirection`
+   - `simulatedAnnealing.js`：限制 op 為 swap-only
+   - `nearestNeighbor.js` / `orOpt.js`：天生不反轉，無需修改
+
+3. **Worker 自動切換** (`src/workers/pathWorker.js`)
+   - `options.preserveDirection` 為 true 時：
+     - 強制停用 `useReversal` 與 `useSeam`（記錄為 effectiveUseReversal/Seam）
+     - 傳遞 `preserveDirection` 給 2-opt 與 SA
+   - `rebuildWithTravels` 修正：Z 變化（換層）一律插入 travel 防止抬升動作遺失
+
+4. **保留模式導出器** (`src/core/gcodePreservingExporter.js`)
+   - 輸出順序：preamble → 每層 layerHeader + segments（依優化順序，原 sourceLines 直接輸出）→ epilogue
+   - 優化器新生成的 travel（無 sourceLines）使用 `defaultTravelF` 生成 G0
+   - 提供 `canUsePreservingExport(pathData)` 驗證
+
+5. **UI 自動切換** (`OptimizationPanel`, `ControlPanel`)
+   - G-code 來源時：
+     - 頂端顯示「🔒 G-code 保留模式」提示卡
+     - Reversal / Seam checkbox 灰化並 disabled
+     - 自動傳遞 `preserveDirection: true` 給 worker
+   - 生成按鈕：G-code 來源時顯示「💾 導出優化後 G-code（保留模式）」並走 `exportPreservedGcode`
+
+### 驗證
+- ✅ Parse sample-print.gcode 後，所有 24 行 G1+E 完整保留 sourceLines
+- ✅ Optimize（NN + 2-opt preserveDirection）後重新導出，列印行數與內容完全相同
+- ✅ LAYER:0/1/2 標記在 export 中位於對應層的開頭
+- ✅ Z-lift travel（G0 X0 Y0 Z40）不再遺失
+- ✅ preamble（G28/G90/M82/G92）與 epilogue（M104/M84）原樣保留
+- ✅ npm run build 通過
+
+---
+
 ## 🎉 Phase 8 完成！
 
 **Phase 8: 動畫模擬增強** 已全部完成！

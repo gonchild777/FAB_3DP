@@ -179,9 +179,14 @@ function handleOptimizePath(payload, taskId) {
         useSeam = false,
         seamMode = 'nearest',
         useVisibilityGraph = false,
+        preserveDirection = false,  // G-code 模式自動為 true，禁用會改變方向/接縫的操作
     } = options
 
     reportProgress(taskId, 0, '開始路徑優化...')
+
+    // G-code 保留模式：強制關閉會修改段落內容的算法
+    const effectiveUseReversal = useReversal && !preserveDirection
+    const effectiveUseSeam = useSeam && !preserveDirection
 
     const optimizedData = JSON.parse(JSON.stringify(pathData))
     let totalOriginalDistance = 0
@@ -207,7 +212,7 @@ function handleOptimizePath(payload, taskId) {
             result = nnOptimize(result, { startPos })
         } else if (sortAlgorithm === 'nn_2opt') {
             result = nnOptimize(result, { startPos })
-            result = twoOptOptimize(result, { startPos })
+            result = twoOptOptimize(result, { startPos, preserveDirection })
         } else if (sortAlgorithm === 'nn_oropt') {
             result = nnOptimize(result, { startPos })
             result = orOptOptimize(result, { startPos })
@@ -216,6 +221,7 @@ function handleOptimizePath(payload, taskId) {
             result = saOptimize(result, {
                 startPos,
                 maxIterations: 5000,
+                preserveDirection,
                 onProgress: (pct, msg) => {
                     const layerPct = Math.round((li / totalLayers) * 100 + (pct * 100 / totalLayers))
                     reportProgress(taskId, layerPct, `SA L${li + 1}/${totalLayers}: ${msg}`)
@@ -223,13 +229,13 @@ function handleOptimizePath(payload, taskId) {
             })
         }
 
-        // 2. 段落方向反轉（封閉輪廓自動跳過）
-        if (useReversal) {
+        // 2. 段落方向反轉（封閉輪廓自動跳過；G-code 模式停用）
+        if (effectiveUseReversal) {
             result = reversalOptimize(result, { startPos })
         }
 
-        // 3. 接縫優化
-        if (useSeam) {
+        // 3. 接縫優化（G-code 模式停用）
+        if (effectiveUseSeam) {
             result = optimizeSeams(result, { mode: seamMode, startPos })
         }
 
@@ -265,10 +271,11 @@ function handleOptimizePath(payload, taskId) {
             improvement: `${improvement}%`,
             algorithmsUsed: {
                 sortAlgorithm,
-                useReversal,
-                useSeam,
-                seamMode: useSeam ? seamMode : null,
+                useReversal: effectiveUseReversal,
+                useSeam: effectiveUseSeam,
+                seamMode: effectiveUseSeam ? seamMode : null,
                 useVisibilityGraph,
+                preserveDirection,
             },
             visibilityGraph: useVisibilityGraph ? visibilityStats : null,
         }

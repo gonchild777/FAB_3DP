@@ -2,6 +2,7 @@ import { useControls, folder } from 'leva'
 import { useState, useMemo, useEffect } from 'react'
 import useStore from '../../stores/useStore'
 import { generateGcode } from '../../core/postProcessor'
+import { exportPreservedGcode, canUsePreservingExport } from '../../core/gcodePreservingExporter'
 import { downloadGcode } from '../../utils/gcodeExporter'
 import { usePathWorker } from '../../hooks/usePathWorker'
 import { getProfileList, getProfile } from '../../core/gcodeProfiles'
@@ -81,6 +82,7 @@ function InfoItem({ label, value, color = 'white' }) {
 
 export default function ControlPanel() {
     const pathData = useStore((state) => state.pathData)
+    const sourceType = useStore((state) => state.sourceType)
     const printSettings = useStore((state) => state.printSettings)
     const machineSettings = useStore((state) => state.machineSettings)
     const updatePrintSetting = useStore((state) => state.updatePrintSetting)
@@ -210,9 +212,18 @@ export default function ControlPanel() {
         if (!pathData) return
         setIsGenerating(true)
         try {
-            const gcode = generateGcode(pathData, printSettings, machineSettings, gcodeProfileId, customProfile)
+            let gcode
+            if (sourceType === 'gcode' && canUsePreservingExport(pathData)) {
+                // 保留模式：使用原檔的指令、F/E 值
+                gcode = exportPreservedGcode(pathData)
+                console.log('G-code 已生成（保留模式）')
+            } else {
+                // 完整生成模式（JSON 來源）
+                gcode = generateGcode(pathData, printSettings, machineSettings, gcodeProfileId, customProfile)
+                console.log(`G-code 已生成 (${gcodeProfileId})`)
+            }
             const filename = downloadGcode(gcode, pathData.header.project_name)
-            console.log(`G-code 已生成 (${gcodeProfileId}): ${filename}`)
+            console.log('檔案:', filename)
         } catch (error) {
             console.error('G-code 生成失敗:', error)
             alert(`生成失敗: ${error.message}`)
@@ -408,7 +419,7 @@ export default function ControlPanel() {
                     boxShadow: pathData ? '0 4px 16px rgba(102, 126, 234, 0.3)' : 'none',
                 }}
             >
-                {isGenerating ? '⏳ 生成中...' : '✨ 生成 G-code'}
+                {isGenerating ? '⏳ 生成中...' : (sourceType === 'gcode' ? '💾 導出優化後 G-code（保留模式）' : '✨ 生成 G-code')}
             </button>
 
             {/* 空狀態提示 */}

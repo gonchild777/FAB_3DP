@@ -1,16 +1,16 @@
 /**
  * G-code Parser
- * 將 .gcode 檔案解析為與 JSON pathData 完全相容的內部格式
+ * 將 .gcode 檔案解析為內部 pathData 格式（與 JSON 格式相容）
+ *
+ * 額外為 G-code 保留模式追蹤每段的 sourceLines、preamble、epilogue，
+ * 使優化後仍可保留所有原始指令（F/E/M-codes/註解）。
  *
  * 輸出格式：
  * {
- *   header: { project_name, nozzle_diameter, layer_height, machine_flavor },
- *   layers: [{ layer_index, z_height, segments: [{ type, is_extruding, points: [{x,y,z}] }] }]
+ *   header: { project_name, nozzle_diameter, layer_height, machine_flavor, source_unit,
+ *             preamble: [string], epilogue: [string], defaultTravelF: number },
+ *   layers: [{ layer_index, z_height, segments: [{ type, is_extruding, points, sourceLines }] }]
  * }
- *
- * 支援指令：G0 / G1 / G90 / G91 / G92 / M82 / M83
- * 支援層偵測：;LAYER:n、;LAYER_CHANGE、Z 變化
- * 支援自動單位偵測：若最大座標 > 500 視為 mm，轉換為 cm
  */
 
 const EPS = 1e-6
@@ -27,18 +27,13 @@ function pointsEqual(p1, p2) {
 
 /**
  * 解析 G-code 字串為內部 pathData 格式
- * @param {string} gcodeString
- * @param {object} options
- *   - fileName: 用於 header.project_name
- *   - unit: 'auto' | 'mm' | 'cm'（預設 auto）
- * @returns {object | null} pathData 或 null（解析失敗）
  */
 export function parseGcode(gcodeString, options = {}) {
     const { fileName = 'Imported G-code', unit = 'auto' } = options
 
     if (!gcodeString || typeof gcodeString !== 'string') return null
 
-    const lines = gcodeString.split(/\r?\n/)
+    const rawLines = gcodeString.split(/\r?\n/)
 
     // 機器狀態
     let pos = { x: 0, y: 0, z: 0 }
@@ -46,6 +41,7 @@ export function parseGcode(gcodeString, options = {}) {
     let lastPrintE = 0
     let absoluteMode = true
     let absoluteExtrusion = true
+    let lastTravelF = null
 
     // 解析結果
     const layers = []
@@ -53,6 +49,12 @@ export function parseGcode(gcodeString, options = {}) {
     let currentSegment = null
     let layerIndexCounter = 0
     let hasExplicitLayerMarker = false
+
+    // 原始指令追蹤
+    let pendingLines = []           // 累積尚未分配到 segment 的行
+    let preamble = null             // 首個 movement 前的所有行
+    let firstSegmentCreated = false
+    let pendingLayerHeader = []     // 等待掛到新 layer 的標記行（;LAYER:n 等）
 
     // 中繼資料
     const meta = {
@@ -64,13 +66,14 @@ export function parseGcode(gcodeString, options = {}) {
 
     const ensureLayer = (z) => {
         if (currentLayer && Math.abs(currentLayer.z_height - z) < EPS) return currentLayer
-        // 關閉舊段落
         currentSegment = null
         const newLayer = {
             layer_index: layerIndexCounter++,
             z_height: z,
             segments: [],
+            layerHeader: pendingLayerHeader,   // ;LAYER:n 等標記行
         }
+        pendingLayerHeader = []
         layers.push(newLayer)
         currentLayer = newLayer
         return newLayer
@@ -81,11 +84,17 @@ export function parseGcode(gcodeString, options = {}) {
             type,
             is_extruding: isExtruding,
             points: [{ ...startPoint }],
+            sourceLines: [],   // 將在 main loop 賦值
         }
         currentLayer.segments.push(currentSegment)
+        return currentSegment
     }
 
-    const addPointToSegment = (point, type, isExtruding) => {
+    /**
+     * 將累積的 pendingLines 指派給對應 segment
+     * 回傳是否建立了新 segment
+     */
+    const flushPendingTo = (point, type, isExtruding) => {
         if (!currentLayer) ensureLayer(point.z)
 
         const needNewSegment = !currentSegment ||
@@ -94,30 +103,54 @@ export function parseGcode(gcodeString, options = {}) {
 
         if (needNewSegment) {
             startSegment(type, isExtruding, pos)
+            // 新段：preamble 處理
+            if (!firstSegmentCreated) {
+                const movementLineIdx = pendingLines.length - 1
+                preamble = pendingLines.slice(0, movementLineIdx)
+                currentSegment.sourceLines = [pendingLines[movementLineIdx]]
+                firstSegmentCreated = true
+            } else {
+                currentSegment.sourceLines = [...pendingLines]
+            }
+        } else {
+            currentSegment.sourceLines.push(...pendingLines)
         }
 
-        // 避免重複點（同位置不重複加入）
+        // 避免重複點
         const last = currentSegment.points[currentSegment.points.length - 1]
         if (!pointsEqual(last, point)) {
             currentSegment.points.push({ ...point })
         }
+
+        pendingLines = []
     }
 
-    for (const rawLine of lines) {
+    for (const rawLine of rawLines) {
         const line = rawLine.trim()
         if (!line) continue
 
-        // 純註解行
+        // 純註解行：LAYER 標記特殊處理（不放入 pendingLines，改放 layerHeader）
         if (line.startsWith(';')) {
+            const isLayerMarker = /^;\s*LAYER[:\s]+\d+/i.test(line) || /^;\s*LAYER_CHANGE/i.test(line)
+            if (isLayerMarker) {
+                pendingLayerHeader.push(rawLine)
+                handleCommentLine(line, meta, () => {
+                    hasExplicitLayerMarker = true
+                    currentLayer = null
+                    currentSegment = null
+                })
+                continue
+            }
+            pendingLines.push(rawLine)
             handleCommentLine(line, meta, () => {
                 hasExplicitLayerMarker = true
-                // 註解觸發層切換時，下一個移動指令會建立新層
-                // 強制下次 ensureLayer 創新層：將 currentLayer 設為 null
                 currentLayer = null
                 currentSegment = null
             })
             continue
         }
+
+        pendingLines.push(rawLine)
 
         // 去除行尾註解
         const codePart = line.split(';')[0].trim()
@@ -126,7 +159,7 @@ export function parseGcode(gcodeString, options = {}) {
         const tokens = codePart.split(/\s+/)
         const cmd = tokens[0].toUpperCase()
 
-        // 模式設定
+        // 模式設定（不消耗 pendingLines，等下次 movement 一起 attach）
         if (cmd === 'G90') { absoluteMode = true; continue }
         if (cmd === 'G91') { absoluteMode = false; continue }
         if (cmd === 'M82') { absoluteExtrusion = true; continue }
@@ -151,6 +184,7 @@ export function parseGcode(gcodeString, options = {}) {
         if (cmd === 'G0' || cmd === 'G1') {
             const next = { x: pos.x, y: pos.y, z: pos.z }
             let nextE = eValue
+            let nextF = null
             let hasE = false
             let hasXYZ = false
 
@@ -166,9 +200,10 @@ export function parseGcode(gcodeString, options = {}) {
                     nextE = absoluteExtrusion ? val : eValue + val
                     hasE = true
                 }
+                else if (axis === 'F') nextF = val
             }
 
-            // 純擠出/回抽（無位置變化）→ 跳過，只更新狀態
+            // 純擠出/回抽（無位置變化）→ 跳過位置更新，行保留在 pendingLines 中
             if (!hasXYZ) {
                 if (hasE) eValue = nextE
                 continue
@@ -177,7 +212,10 @@ export function parseGcode(gcodeString, options = {}) {
             const eDelta = hasE ? nextE - lastPrintE : 0
             const isExtruding = cmd === 'G1' && hasE && eDelta > EPS
 
-            // Z 變化偵測新層（無顯式 LAYER 標記時）
+            // 記錄 travel feedrate
+            if (!isExtruding && nextF != null) lastTravelF = nextF
+
+            // Z 變化偵測新層
             const zChanged = Math.abs(next.z - pos.z) > EPS
             if (zChanged && !hasExplicitLayerMarker) {
                 currentLayer = null
@@ -186,34 +224,32 @@ export function parseGcode(gcodeString, options = {}) {
 
             // 確保有 layer
             if (!currentLayer) ensureLayer(next.z)
-            // 若顯式標記產生空 layer，使用此 z
             else if (currentLayer.segments.length === 0 && Math.abs(currentLayer.z_height - next.z) > EPS) {
                 currentLayer.z_height = next.z
             }
 
             const segType = isExtruding ? 'printing' : 'travel'
-            addPointToSegment(next, segType, isExtruding)
+            flushPendingTo(next, segType, isExtruding)
 
             pos = next
             eValue = nextE
             if (isExtruding) lastPrintE = nextE
-            else if (hasE) lastPrintE = nextE  // 回抽後同步基準
+            else if (hasE) lastPrintE = nextE
         }
     }
+
+    // 收尾：剩餘 pendingLines 為 epilogue
+    const epilogue = pendingLines
 
     // 過濾空層
     const validLayers = layers.filter((l) => l.segments.length > 0)
     if (validLayers.length === 0) return null
 
-    // 重新指派 layer_index 以保證連續
     validLayers.forEach((l, idx) => { l.layer_index = idx })
 
-    // 自動單位偵測與轉換
     const { scale, detectedUnit } = resolveUnitScale(validLayers, unit)
     if (scale !== 1) applyScale(validLayers, scale)
 
-    // layer_height 須與座標同單位（cm）
-    // 註解中的值通常是 mm，scale != 1 時一併換算
     const layerHeight = meta.layerHeight != null
         ? meta.layerHeight * scale
         : (inferLayerHeight(validLayers) ?? 4)
@@ -225,29 +261,27 @@ export function parseGcode(gcodeString, options = {}) {
             layer_height: layerHeight,
             machine_flavor: meta.machineFlavor ?? 'Imported',
             source_unit: detectedUnit,
+            preamble: preamble ?? [],
+            epilogue,
+            defaultTravelF: lastTravelF ?? 3000,
+            sourceScale: scale,   // 重新導出時將 cm 換回原單位用
         },
         layers: validLayers,
     }
 }
 
-/**
- * 處理註解行：偵測層標記與中繼資料
- */
 function handleCommentLine(line, meta, onLayerMarker) {
-    // 層標記：;LAYER:0、;LAYER 0、;Layer:0
     const layerMatch = line.match(/^;\s*LAYER[:\s]+(\d+)/i)
     if (layerMatch) {
         onLayerMarker(parseInt(layerMatch[1], 10))
         return
     }
 
-    // PrusaSlicer ;LAYER_CHANGE
     if (/^;\s*LAYER_CHANGE/i.test(line)) {
         onLayerMarker(null)
         return
     }
 
-    // 中繼資料解析
     const nozzleMatch = line.match(/nozzle[_ ]?diameter\s*[=:]\s*([\d.]+)/i)
     if (nozzleMatch && meta.nozzleDiameter === null) {
         meta.nozzleDiameter = parseFloat(nozzleMatch[1])
@@ -272,9 +306,6 @@ function handleCommentLine(line, meta, onLayerMarker) {
     }
 }
 
-/**
- * 自動偵測單位：若最大座標 > 500 視為 mm
- */
 function resolveUnitScale(layers, unitOption) {
     if (unitOption === 'cm') return { scale: 1, detectedUnit: 'cm' }
     if (unitOption === 'mm') return { scale: 0.1, detectedUnit: 'mm' }
@@ -306,9 +337,6 @@ function applyScale(layers, scale) {
     }
 }
 
-/**
- * 自動推算 layer_height：取相鄰層 Z 差的中位數
- */
 function inferLayerHeight(layers) {
     if (layers.length < 2) return null
     const diffs = []

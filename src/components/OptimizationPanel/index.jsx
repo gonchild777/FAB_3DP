@@ -93,25 +93,27 @@ function RadioOption({ checked, onClick, label, desc }) {
     )
 }
 
-function Checkbox({ checked, onChange, label, hint }) {
+function Checkbox({ checked, onChange, label, hint, disabled = false }) {
     return (
         <label style={{
             display: 'flex',
             alignItems: 'center',
             gap: '10px',
             padding: '8px',
-            cursor: 'pointer',
+            cursor: disabled ? 'not-allowed' : 'pointer',
             borderRadius: '6px',
             transition: 'background 0.15s',
+            opacity: disabled ? 0.5 : 1,
         }}
-            onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
+            onMouseOver={(e) => !disabled && (e.currentTarget.style.background = 'rgba(255,255,255,0.04)')}
             onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
         >
             <input
                 type="checkbox"
                 checked={checked}
-                onChange={(e) => onChange(e.target.checked)}
-                style={{ width: '14px', height: '14px', accentColor: '#818cf8', cursor: 'pointer' }}
+                disabled={disabled}
+                onChange={(e) => !disabled && onChange(e.target.checked)}
+                style={{ width: '14px', height: '14px', accentColor: '#818cf8', cursor: disabled ? 'not-allowed' : 'pointer' }}
             />
             <div style={{ flex: 1 }}>
                 <div style={{ fontSize: '12px', color: 'white' }}>{label}</div>
@@ -123,6 +125,7 @@ function Checkbox({ checked, onChange, label, hint }) {
 
 export default function OptimizationPanel() {
     const pathData = useStore((s) => s.pathData)
+    const sourceType = useStore((s) => s.sourceType)
     const originalPathData = useStore((s) => s.originalPathData)
     const setOriginalPathData = useStore((s) => s.setOriginalPathData)
     const setPathData = useStore((s) => s.setPathData)
@@ -139,6 +142,7 @@ export default function OptimizationPanel() {
     const { optimizePath, progress, message } = usePathWorker()
     const [error, setError] = useState(null)
 
+    const isGcodeSource = sourceType === 'gcode'
     const canOptimize = !!pathData && !isOptimizing
 
     const handleOptimize = async () => {
@@ -146,11 +150,15 @@ export default function OptimizationPanel() {
         setError(null)
         setIsOptimizing(true)
         try {
-            // 首次優化時備份原始資料
             if (!originalPathData) setOriginalPathData(pathData)
 
             const baseData = originalPathData ?? pathData
-            const result = await optimizePath(baseData, { ...settings })
+            // G-code 來源：自動啟用 preserveDirection
+            const effectiveOptions = {
+                ...settings,
+                preserveDirection: isGcodeSource,
+            }
+            const result = await optimizePath(baseData, effectiveOptions)
             setPathData(result.optimizedData)
             setOptimizationResult(result.stats)
         } catch (err) {
@@ -167,6 +175,25 @@ export default function OptimizationPanel() {
 
     return (
         <Card title="路徑優化" icon="⚡">
+            {/* G-code 保留模式提示 */}
+            {isGcodeSource && (
+                <div style={{
+                    marginBottom: '14px',
+                    padding: '10px 12px',
+                    background: 'rgba(99, 102, 241, 0.12)',
+                    border: '1px solid rgba(99, 102, 241, 0.3)',
+                    borderRadius: '8px',
+                    fontSize: '11px',
+                    color: '#c7d2fe',
+                    lineHeight: '1.5',
+                }}>
+                    <div style={{ fontWeight: '700', marginBottom: '4px' }}>🔒 G-code 保留模式</div>
+                    <div style={{ color: 'rgba(199, 210, 254, 0.85)' }}>
+                        所有 F/E 值、M-codes、註解、列印方向與接縫位置完整保留。僅優化段落順序與空移路徑。
+                    </div>
+                </div>
+            )}
+
             {/* Step 1: 排序演算法 */}
             <div style={{ marginBottom: '14px' }}>
                 <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '1px' }}>
@@ -191,18 +218,20 @@ export default function OptimizationPanel() {
                     2. 輔助優化（可複選）
                 </div>
                 <Checkbox
-                    checked={settings.useReversal}
+                    checked={isGcodeSource ? false : settings.useReversal}
                     onChange={(v) => updateSetting('useReversal', v)}
                     label="段落方向反轉"
-                    hint="非封閉段落自動選最短方向"
+                    hint={isGcodeSource ? '保留模式：自動停用（會改變列印方向）' : '非封閉段落自動選最短方向'}
+                    disabled={isGcodeSource}
                 />
                 <Checkbox
-                    checked={settings.useSeam}
+                    checked={isGcodeSource ? false : settings.useSeam}
                     onChange={(v) => updateSetting('useSeam', v)}
                     label="接縫點優化"
-                    hint="封閉輪廓重新選擇起點"
+                    hint={isGcodeSource ? '保留模式：自動停用（會改變接縫位置）' : '封閉輪廓重新選擇起點'}
+                    disabled={isGcodeSource}
                 />
-                {settings.useSeam && (
+                {settings.useSeam && !isGcodeSource && (
                     <div style={{ paddingLeft: '32px', marginTop: '-4px', marginBottom: '4px', display: 'flex', gap: '6px' }}>
                         {SEAM_MODES.map(m => (
                             <button
